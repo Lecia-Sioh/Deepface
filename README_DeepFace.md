@@ -138,13 +138,13 @@ The system compares the new face embedding with the registered embeddings using 
 The current threshold is:
 
 ```python
-MATCH_THRESHOLD = 0.38
+MATCH_THRESHOLD = 0.8
 ```
 
 A match is accepted when:
 
 ```text
-Cosine Distance ≤ 0.38
+Cosine Distance ≤ 0.8
 ```
 
 The displayed similarity is calculated as:
