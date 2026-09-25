@@ -1,86 +1,74 @@
-DeepFace Watchlist & Face Recognition System
+DeepFace Watchlist & Recognition System
 
-A Streamlit-based face recognition and watchlist system using OpenCV Haar Cascade for face detection and DeepFace with FaceNet512 for facial embeddings.
+A face recognition watchlist system built with DeepFace, FaceNet512, OpenCV, and Streamlit.
 
-Overview
+The system is designed to register faces, generate facial embeddings, compare new face images against the registered database, and classify recognised people as Authorised or Blacklisted.
 
-The system uses:
+Project Overview
 
-Streamlit — user interface and live camera feed
+The system uses DeepFace to generate facial embeddings with the FaceNet512 model.
 
-OpenCV Haar Cascade — detects faces
+The overall recognition flow is:
 
-DeepFace — generates facial embeddings
-
-FaceNet512 — the DeepFace model used for embeddings
-
-NumPy — cosine-similarity comparison
-
-FastAPI — receives the recognition result from Streamlit
-
-Recognition flow
-
-Camera
-  ↓
+Input Face Image
+      ↓
 Haar Cascade
-  ↓
-Face Crop
-  ↓
-DeepFace / FaceNet512
-  ↓
+      ↓
+Face Detection & Cropping
+      ↓
+DeepFace + FaceNet512
+      ↓
 Face Embedding
-  ↓
+      ↓
 Cosine Distance Matching
-  ↓
-Person + Entity + Confidence
-  ↓
+      ↓
+Person Identification
+      ↓
+Entity + Confidence
+      ↓
 API
 
-Features
+Main Technologies
 
-Face Registration
+Technology
 
-Users can:
-
-Enter a person's name
-
-Select Authorised or Blacklisted
-
-Upload face photos
-
-Capture a face using the webcam
-
-The registration process detects/crops the face, creates augmentations, generates FaceNet512 embeddings, and updates the local embedding cache.
-
-Live Face Recognition
-
-The live camera:
-
-Captures frames.
-
-Detects faces using Haar Cascade.
-
-Crops the detected face.
-
-Generates a FaceNet512 embedding using DeepFace.
-
-Compares the embedding with registered embeddings.
-
-Determines the closest match.
-
-Calculates the similarity percentage.
-
-Displays the result.
-
-Sends the identification information to the API.
+Purpose
 
 DeepFace
 
-DeepFace is used through:
+Facial representation and embedding generation
+
+FaceNet512
+
+Model used by DeepFace
+
+OpenCV
+
+Face detection, image processing, and face cropping
+
+NumPy
+
+Embedding comparison and cosine similarity
+
+Pandas
+
+Watchlist management
+
+Streamlit
+
+Application interface
+
+FastAPI
+
+API communication
+
+How DeepFace Is Used
+
+DeepFace is imported with:
 
 from deepface import DeepFace
 
-The project calls:
+The project uses:
 
 DeepFace.represent(
     img_path=face_img,
@@ -89,43 +77,55 @@ DeepFace.represent(
     enforce_detection=False
 )
 
-What each component does
+DeepFace converts a detected face into a numerical FaceNet512 embedding.
+
+The embedding is then used by the matching system to find the closest registered person.
+
+DeepFace vs Haar Cascade
+
+These two components have different roles:
 
 Haar Cascade
-→ Finds where the face is.
+
+Detects where the face is located in the image.
 
 DeepFace + FaceNet512
-→ Converts the face into a numerical embedding.
 
-Matching code
-→ Compares the embedding with registered embeddings.
+Converts the detected face into a numerical representation that can be compared with registered faces.
 
-Recognition Threshold
+Face Registration
 
-The current threshold is:
+When a person is registered, the system:
 
-MATCH_THRESHOLD = 0.38
+Takes the person's name.
 
-This is a cosine distance threshold, not a DeepFace confidence threshold.
+Assigns a watchlist status.
 
-A match is accepted when:
+Receives one or more face images.
 
-cosine distance <= 0.38
+Detects and crops the face.
 
-The displayed similarity is calculated as:
+Generates augmented versions of the image.
 
-confidence_pct = (1.0 - min_dist) * 100.0
+Generates FaceNet512 embeddings using DeepFace.
 
-With the current threshold:
+Saves the embeddings for future matching.
 
-distance <= 0.38
-similarity >= 62%
+Watchlist Status
 
-The displayed percentage is a cosine-similarity-based score, not a calibrated probability of recognition accuracy.
+A person can be registered as:
+
+Authorised
+Blacklisted
+
+These statuses are later converted into API entities:
+
+Authorised  →  good
+Blacklisted →  bad
 
 Face Augmentation
 
-During registration, the system creates:
+The system creates additional versions of a registered face:
 
 Original
 
@@ -141,39 +141,60 @@ Darker
 
 Higher contrast
 
-These samples are converted into embeddings and used for matching.
+Each augmented image can produce an additional FaceNet512 embedding.
 
-Local Files
+This gives the matcher multiple representations of the same person.
 
-faces/
-    └── Person Name/
-        ├── sample_01.jpg
-        ├── sample_02.jpg
-        └── ...
+Face Matching
 
-watchlist.csv
-embeddings_cache.pkl
-haarcascade_frontalface_default.xml
+The system compares the new face embedding with the registered embeddings using cosine similarity / cosine distance.
 
-faces/
+The current threshold is:
 
-Contains registered face images.
+MATCH_THRESHOLD = 0.8
 
-watchlist.csv
+A match is accepted when:
 
-Contains registered names and watchlist status.
+Cosine Distance ≤ 0.38
 
-embeddings_cache.pkl
+The displayed similarity is calculated as:
 
-Contains generated facial embeddings used for matching.
+confidence_pct = (1.0 - min_dist) * 100.0
 
-haarcascade_frontalface_default.xml
+For example:
 
-OpenCV Haar Cascade model used for face detection.
+Distance:   0.13
+Similarity: 87%
+
+The displayed percentage is a similarity score, not a guaranteed probability of recognition accuracy.
+
+Streamlit Application
+
+The Streamlit application provides three main functions:
+
+1. Register Face
+
+Register a new person and generate the embeddings used by the recognition system.
+
+2. De-register Face
+
+Remove a registered person from the local watchlist and rebuild the embedding cache.
+
+3. Live Recognition
+
+Process a face, generate its embedding, compare it with the registered embeddings, and display:
+
+Person
+Status
+Confidence
+
+The recognition logic remains inside the Streamlit application.
 
 API Integration
 
-The recognition stays in Streamlit. After recognition, Streamlit sends these four pieces of information to /identify:
+After recognition, the result can be sent to the API.
+
+The /identify information contains:
 
 👤 Person name
 🖼️ Person picture
@@ -183,17 +204,24 @@ The recognition stays in Streamlit. After recognition, Streamlit sends these fou
 Example:
 
 {
-  "person": "Lecia",
-  "picture": "identified_face.jpg",
-  "entity": "good",
-  "confidence": 87.5
+    "person": "Lecia",
+    "entity": "good",
+    "confidence": 87.5
 }
 
-The API does not perform Haar Cascade detection, DeepFace embedding generation, or face matching.
+The API is used to receive and provide the recognition information. The face recognition itself is performed by the Streamlit application using DeepFace.
+
+Entity Values
+
+good    → Authorised person
+bad     → Blacklisted person
+unknown → No accepted match
 
 API Endpoints
 
 POST /register
+
+Used to send registration information.
 
 Request:
 
@@ -201,18 +229,22 @@ name
 list_type
 photo
 
-Where:
+Example:
 
-white = authorised
-black = blacklisted
+{
+    "name": "Lecia",
+    "list_type": "white"
+}
 
 Response:
 
 {
-  "status": "registered"
+    "status": "registered"
 }
 
 POST /identify
+
+Used to send the identification result.
 
 Request:
 
@@ -224,55 +256,82 @@ confidence
 Example response:
 
 {
-  "person": "Lecia",
-  "picture": "http://127.0.0.1:8000/identify/picture",
-  "entity": "good",
-  "confidence": 87.5
+    "person": "Lecia",
+    "picture": "http://127.0.0.1:8000/identify/picture",
+    "entity": "good",
+    "confidence": 87.5
 }
 
 GET /identify
 
-Returns the latest identification result exposed by the API.
+Returns the latest identification information exposed by the API.
 
 Example:
 
 {
-  "person": "Lecia",
-  "picture": "http://127.0.0.1:8000/identify/picture",
-  "entity": "good",
-  "confidence": 87.5
+    "person": "Lecia",
+    "picture": "http://127.0.0.1:8000/identify/picture",
+    "entity": "good",
+    "confidence": 87.5
 }
 
-GET /identify/picture
+Project Files
 
-Returns the latest face picture received by the API.
+The main local data used by the application includes:
+
+faces/
+watchlist.csv
+embeddings_cache.pkl
+haarcascade_frontalface_default.xml
+
+faces/
+
+Contains the registered face images.
+
+watchlist.csv
+
+Contains the registered person's name and watchlist status.
+
+embeddings_cache.pkl
+
+Contains the generated face embeddings used for matching.
+
+haarcascade_frontalface_default.xml
+
+Used for face detection before the face is passed to DeepFace.
 
 Installation
 
-Install the required packages:
+Install the main dependencies:
 
-pip install streamlit
+pip install deepface
+pip install tensorflow
 pip install opencv-python
 pip install numpy
 pip install pandas
+pip install streamlit
 pip install requests
-pip install deepface
-pip install tensorflow
 pip install fastapi
 pip install uvicorn
 pip install python-multipart
 
-Running Streamlit
+Running the Application
+
+Streamlit
+
+Run the Streamlit application with:
 
 streamlit run streamlit.py
 
-Replace streamlit.py with your actual Streamlit filename.
+Replace streamlit.py with the filename of your application.
 
-Running the API Locally
+FastAPI
+
+Run the local API with:
 
 python -m uvicorn api_latest_result:app --host 127.0.0.1 --port 8000
 
-Local API:
+API address:
 
 http://127.0.0.1:8000
 
@@ -280,89 +339,30 @@ FastAPI documentation:
 
 http://127.0.0.1:8000/docs
 
-Testing
+Example Recognition Result
 
-Open:
+A successful match may produce:
 
-http://127.0.0.1:8000/docs
+Person: Lecia
+Entity: good
+Confidence: 87.5%
 
-Use the Swagger interface to test the POST endpoints.
+The system then sends the recognition information to the API.
 
-After Streamlit sends an identification result successfully, open:
+Key Point
 
-http://127.0.0.1:8000/identify
+The core of this project is:
 
-to view the latest result.
+DeepFace
+     +
+FaceNet512
+     +
+Face Embeddings
+     +
+Cosine Similarity
+     +
+Watchlist Matching
+     +
+API Integration
 
-Open:
-
-http://127.0.0.1:8000/identify/picture
-
-to view the latest face picture.
-
-Performance
-
-DeepFace/FaceNet512 is the most computationally expensive part of the live recognition pipeline.
-
-For a smoother live feed:
-
-Use 640x480 camera resolution
-
-Avoid running DeepFace on every frame
-
-Recognize every few frames while displaying every frame
-
-Reduce unnecessary API requests
-
-Reuse Streamlit placeholders
-
-Resize frames for Haar Cascade detection when appropriate
-
-Example:
-
-camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-camera.set(cv2.CAP_PROP_FPS, 30)
-
-Troubleshooting
-
-ModuleNotFoundError: deepface
-
-pip install deepface
-
-Camera cannot open
-
-Check camera connection, Windows camera permissions, and whether another program is using the camera.
-
-API connection refused
-
-Make sure FastAPI is running:
-
-python -m uvicorn api_latest_result:app --host 127.0.0.1 --port 8000
-
-422 Unprocessable Content
-
-Check that the request fields match the API.
-
-For /identify:
-
-person
-picture
-entity
-confidence
-
-405 Method Not Allowed
-
-This usually means a browser sent GET to an endpoint that only accepts POST.
-
-Use /docs to test POST endpoints.
-
-Important Note
-
-The displayed recognition score is calculated from cosine similarity:
-
-(1 - cosine distance) × 100
-
-It should not be interpreted as a guaranteed probability that the identity is correct.
-
-The current matching approach compares the live embedding against the registered embeddings and selects the closest match, subject to the configured cosine-distance threshold.
+DeepFace is responsible for creating the facial representation used by the recognition system, while the application's matching logic determines which registered person is the closest match.
