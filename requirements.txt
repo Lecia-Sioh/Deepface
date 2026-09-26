@@ -1,0 +1,11 @@
+deepface
+fastapi
+ipykernel
+numpy
+opencv-python
+pandas
+pydantic
+python-multipart
+requests
+streamlit
+uvicorn[standard]
