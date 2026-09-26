@@ -24,8 +24,12 @@ st.set_page_config(
 
 DATABASE_PATH = "faces"
 WATCHLIST_FILE = "watchlist.csv"
-CACHE_FILE = "embeddings_cache.pkl"
+CACHE_FILE = "arcface_embeddings_cache.pkl"
 CASCADE_FILENAME = "haarcascade_frontalface_default.xml"
+MODEL_NAME = "ArcFace"
+DETECTOR_BACKEND = "retinaface"
+DISTANCE_METRIC = "euclidean_l2"
+MATCH_THRESHOLD = 1.13
 
 # API
 API_BASE_URL = "http://127.0.0.1:8000"
@@ -205,8 +209,8 @@ def extract_face_embedding(face_img):
     try:
         results = DeepFace.represent(
             img_path=face_img,
-            model_name="Facenet512",
-            detector_backend="skip",
+            model_name=MODEL_NAME,
+            detector_backend=DETECTOR_BACKEND,
             enforce_detection=False
         )
 
@@ -368,8 +372,7 @@ def match_face_embedding(query_emb, cache, threshold=0.38):
         if len(embeddings) == 0:
             continue
 
-        sims = np.dot(embeddings, query_emb)
-        dists = 1.0 - sims
+        dists = np.linalg.norm(embeddings - query_emb, axis=1)
         person_min_dist = float(np.min(dists))
 
         if person_min_dist < min_dist:
@@ -378,9 +381,8 @@ def match_face_embedding(query_emb, cache, threshold=0.38):
             best_status = status
 
     if best_name is not None and min_dist <= threshold:
-        # Cosine Similarity percentage: (1.0 - min_dist) * 100
-        confidence_pct = max(0.0, min(100.0, (1.0 - min_dist) * 100.0))
-        return best_name, best_status, min_dist, confidence_pct
+        similarity_pct = max(0.0, min(100.0, (1.0 - min_dist / 2.0) * 100.0))
+        return best_name, best_status, min_dist, similarity_pct
 
     return None, None, min_dist, 0.0
 
@@ -390,7 +392,7 @@ def match_face_embedding(query_emb, cache, threshold=0.38):
 # ==========================================================
 
 st.title("🛡️ DeepFace Watchlist & Recognition System")
-st.write("Augmented FaceNet512 Vector Embeddings with Direct 1-NN Blacklist Verification.")
+st.write("ArcFace embeddings with RetinaFace detection and Euclidean L2 matching.")
 
 option = st.sidebar.selectbox(
     "Select Function",
@@ -443,7 +445,7 @@ if option == "Register Face":
         else:
             progress = st.progress(0.0)
             status_text = st.empty()
-            status_text.info("Detecting faces, generating augmentations, and updating FaceNet512 embeddings...")
+            status_text.info("Detecting faces, generating augmentations, and updating ArcFace embeddings...")
 
             try:
                 saved_paths, aug_count = register_face(
@@ -552,16 +554,7 @@ elif option == "Live Recognition":
 
         col_t1, col_t2 = st.columns([2, 1])
         with col_t1:
-            MATCH_THRESHOLD = 0.8 
-            #shang changed
-            # MATCH_THRESHOLD = st.slider(
-            #     "Recognition Cosine Distance Threshold (Lower = Stricter)",
-            #     min_value=0.20,
-            #     max_value=0.60,
-            #     value=0.38,
-            #     step=0.01,
-            #     help="Recommended: 0.35 to 0.40. Face matches with cosine distance below this threshold are recognized."
-            # )
+            st.caption(f"{MODEL_NAME} {DISTANCE_METRIC} threshold: {MATCH_THRESHOLD:.2f}")
         with col_t2:
             start_camera = st.checkbox("Start Camera Feed", value=False)
 
