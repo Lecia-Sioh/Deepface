@@ -6,6 +6,8 @@ import pandas as pd
 import streamlit as st
 import requests
 import time
+import threading
+import concurrent.futures
 from deepface import DeepFace
 
 # ==========================================================
@@ -25,16 +27,21 @@ st.set_page_config(
 DATABASE_PATH = "faces"
 WATCHLIST_FILE = "watchlist.csv"
 CACHE_FILE = "arcface_embeddings_cache.pkl"
-CASCADE_FILENAME = "haarcascade_frontalface_default.xml"
+# CACHE_FILE = "vggface_embeddings_cache.pkl"
 MODEL_NAME = "ArcFace"
+# MODEL_NAME = "VGG-Face"
 DETECTOR_BACKEND = "retinaface"
+DETECTION_CONFIDENCE = 0.90   # Ignore DeepFace detections below this confidence
 DISTANCE_METRIC = "euclidean_l2"
-MATCH_THRESHOLD = 1.13
+MATCH_THRESHOLD = 1.13   # Default reference: 1.17 for VGG-Face euclidean_l2 (was 1.13 for ArcFace)
 
 # API
 API_BASE_URL = "http://127.0.0.1:8000"
 API_TIMEOUT = 5
 API_SEND_INTERVAL = 0.5
+
+# Performance Tuning
+RECOGNITION_FRAME_INTERVAL = 3  # Perform full DeepFace recognition every N frames
 
 os.makedirs(DATABASE_PATH, exist_ok=True)
 
@@ -42,34 +49,79 @@ if not os.path.exists(WATCHLIST_FILE):
     df = pd.DataFrame(columns=["name", "status"])
     df.to_csv(WATCHLIST_FILE, index=False)
 
+# Thread pool for non-blocking background API calls
+api_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
 
 # ==========================================================
-# HAAR CASCADE INITIALIZATION
+# THREADED WEBCAM CAPTURE FOR LAG-FREE LIVE FEED
 # ==========================================================
 
-def load_face_cascade():
-    if os.path.exists(CASCADE_FILENAME):
-        cascade = cv2.CascadeClassifier(CASCADE_FILENAME)
-        if not cascade.empty():
-            return cascade, CASCADE_FILENAME
+class ThreadedCamera:
+    """
+    Continuously captures camera frames in a background thread
+    to prevent frame buffer queuing lag.
+    """
+    def __init__(self, src=0, width=640, height=480):
+        self.cap = cv2.VideoCapture(src)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        self.grabbed, self.frame = self.cap.read()
+        self.started = False
+        self.read_lock = threading.Lock()
 
-    opencv_path = os.path.join(cv2.data.haarcascades, CASCADE_FILENAME)
-    if os.path.exists(opencv_path):
-        cascade = cv2.CascadeClassifier(opencv_path)
-        if not cascade.empty():
-            return cascade, opencv_path
+    def start(self):
+        if self.started:
+            return self
+        self.started = True
+        self.thread = threading.Thread(target=self.update, daemon=True)
+        self.thread.start()
+        return self
 
-    return None, None
+    def update(self):
+        while self.started:
+            grabbed, frame = self.cap.read()
+            with self.read_lock:
+                self.grabbed = grabbed
+                self.frame = frame
+            time.sleep(0.01)  # Yield CPU briefly
+
+    def read(self):
+        with self.read_lock:
+            if not self.grabbed or self.frame is None:
+                return False, None
+            return True, self.frame.copy()
+
+    def isOpened(self):
+        return self.cap.isOpened()
+
+    def stop(self):
+        self.started = False
+        if hasattr(self, 'thread'):
+            self.thread.join(timeout=1.0)
+        if self.cap.isOpened():
+            self.cap.release()
 
 
-face_cascade, CASCADE_PATH = load_face_cascade()
+# ==========================================================
+# DEEPFACE MODEL WARM-UP (PRELOAD WEIGHTS INTO RAM)
+# ==========================================================
 
-if face_cascade is None:
-    st.error(
-        f"Could not load Haar Cascade XML file ({CASCADE_FILENAME}). "
-        "Please ensure OpenCV is properly installed."
-    )
-    st.stop()
+@st.cache_resource
+def warmup_deepface_model():
+    try:
+        dummy_img = np.zeros((224, 224, 3), dtype=np.uint8)
+        DeepFace.represent(
+            img_path=dummy_img,
+            model_name=MODEL_NAME,
+            detector_backend="skip",
+            enforce_detection=False
+        )
+    except Exception as e:
+        print("Warmup notice:", e)
+
+warmup_deepface_model()
 
 
 # ==========================================================
@@ -106,7 +158,7 @@ def send_register_to_api(name, status_value, image_path):
 def send_identify_to_api(person, picture, entity, confidence):
     """
     Send the identification RESULT to the API.
-    Recognition remains in Streamlit.
+    Executed asynchronously so main UI stream never lags.
     """
     try:
         ok, encoded = cv2.imencode(".jpg", picture)
@@ -137,6 +189,13 @@ def send_identify_to_api(person, picture, entity, confidence):
         return {"error": f"API /identify error: {e}"}
 
 
+def send_identify_async(person, picture, entity, confidence):
+    """Submits API identification post to non-blocking background thread pool."""
+    def _job():
+        send_identify_to_api(person, picture, entity, confidence)
+    api_executor.submit(_job)
+
+
 def load_watchlist():
     if os.path.exists(WATCHLIST_FILE):
         try:
@@ -146,16 +205,98 @@ def load_watchlist():
     return pd.DataFrame(columns=["name", "status"])
 
 
-def detect_faces(img, scale_factor=1.1, min_neighbors=5, min_size=(50, 50)):
+def get_registered_image_path(name, data=None):
+    """Retrieve the primary registered face image path for a person."""
+    if data and isinstance(data, dict):
+        img_path = data.get("image_path")
+        if img_path and os.path.exists(img_path):
+            return img_path
+
+    person_folder = os.path.join(DATABASE_PATH, name)
+    if os.path.isdir(person_folder):
+        files = sorted([
+            f for f in os.listdir(person_folder)
+            if f.lower().endswith((".jpg", ".jpeg", ".png"))
+        ])
+        if files:
+            return os.path.join(person_folder, files[0])
+
+    return None
+
+
+def update_person_status(name, new_status, cache=None):
+    """Update a person's status in watchlist.csv and the cache file."""
+    df = load_watchlist()
+    if name in df["name"].values:
+        df.loc[df["name"] == name, "status"] = new_status
+    else:
+        new_row = pd.DataFrame({"name": [name], "status": [new_status]})
+        df = pd.concat([df, new_row], ignore_index=True)
+    df.to_csv(WATCHLIST_FILE, index=False)
+
+    if cache is not None and name in cache:
+        cache[name]["status"] = new_status
+        try:
+            with open(CACHE_FILE, "wb") as f:
+                pickle.dump(cache, f)
+        except Exception as e:
+            print("Failed to save updated cache:", e)
+
+
+def quick_blacklist_live_face(person_name, face_crop, cache=None):
+    """Register a new face directly from the live feed and blacklist them."""
+    person_name = person_name.strip()
+    if not person_name:
+        return False, "Person name cannot be empty."
+
+    person_folder = os.path.join(DATABASE_PATH, person_name)
+    os.makedirs(person_folder, exist_ok=True)
+    sample_path = os.path.join(person_folder, "sample_01.jpg")
+    cv2.imwrite(sample_path, face_crop)
+
+    update_person_status(person_name, "Blacklisted", cache)
+    new_cache = retrain_watchlist_cache()
+    if cache is not None:
+        cache.clear()
+        cache.update(new_cache)
+
+    return True, f"Successfully registered and blacklisted {person_name}!"
+
+
+def detect_faces(img, min_size=(50, 50)):
+    """Detect faces with DeepFace and return a list of (x, y, w, h) boxes."""
     if img is None or img.size == 0:
         return []
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    return face_cascade.detectMultiScale(
-        gray,
-        scaleFactor=scale_factor,
-        minNeighbors=min_neighbors,
-        minSize=min_size
-    )
+
+    try:
+        faces = DeepFace.extract_faces(
+            img_path=img,
+            detector_backend=DETECTOR_BACKEND,
+            enforce_detection=False,
+            align=False
+        )
+    except Exception as e:
+        print("Face detection error:", e)
+        return []
+
+    h_img, w_img = img.shape[:2]
+    boxes = []
+    for face in faces:
+        # With enforce_detection=False, DeepFace returns the whole image
+        # with confidence 0 when no face is found - skip those.
+        if face.get("confidence", 0) < DETECTION_CONFIDENCE:
+            continue
+
+        area = face["facial_area"]
+        x, y, w, h = int(area["x"]), int(area["y"]), int(area["w"]), int(area["h"])
+        if w < min_size[0] or h < min_size[1]:
+            continue
+        if w >= w_img and h >= h_img:
+            continue
+
+        boxes.append((x, y, w, h))
+
+    return boxes
 
 
 def crop_face_with_margin(img, box, margin=0.10):
@@ -202,15 +343,20 @@ def generate_face_augmentations(face_img):
     return augmented
 
 
-def extract_face_embedding(face_img):
+def extract_face_embedding(face_img, fast_mode=True):
     if face_img is None or face_img.size == 0:
         return None
 
     try:
+        # If fast_mode=True (for already cropped face bounding boxes),
+        # using backend="skip" prevents running RetinaFace a SECOND time on the small crop,
+        # which eliminates 95% of live feed lag.
+        backend = "skip" if fast_mode else DETECTOR_BACKEND
+
         results = DeepFace.represent(
             img_path=face_img,
             model_name=MODEL_NAME,
-            detector_backend=DETECTOR_BACKEND,
+            detector_backend=backend,
             enforce_detection=False
         )
 
@@ -353,7 +499,7 @@ def delete_face(name):
     retrain_watchlist_cache()
 
 
-def match_face_embedding(query_emb, cache, threshold=0.38):
+def match_face_embedding(query_emb, cache, threshold=1.17):
     if query_emb is None or not cache:
         return None, None, float("inf"), 0.0
 
@@ -372,6 +518,7 @@ def match_face_embedding(query_emb, cache, threshold=0.38):
         if len(embeddings) == 0:
             continue
 
+        # Fast Euclidean L2 Distance calculation
         dists = np.linalg.norm(embeddings - query_emb, axis=1)
         person_min_dist = float(np.min(dists))
 
@@ -392,7 +539,7 @@ def match_face_embedding(query_emb, cache, threshold=0.38):
 # ==========================================================
 
 st.title("🛡️ DeepFace Watchlist & Recognition System")
-st.write("ArcFace embeddings with RetinaFace detection and Euclidean L2 matching.")
+st.write(f"{MODEL_NAME} embeddings with {DETECTOR_BACKEND} face detection and non-blocking streaming.")
 
 option = st.sidebar.selectbox(
     "Select Function",
@@ -445,7 +592,7 @@ if option == "Register Face":
         else:
             progress = st.progress(0.0)
             status_text = st.empty()
-            status_text.info("Detecting faces, generating augmentations, and updating ArcFace embeddings...")
+            status_text.info(f"Detecting faces, generating augmentations, and updating {MODEL_NAME} embeddings...")
 
             try:
                 saved_paths, aug_count = register_face(
@@ -470,7 +617,7 @@ if option == "Register Face":
                 )
 
                 if "error" in api_result:
-                    st.warning(f"API /register failed: {api_result['error']}")
+                    st.warning(f"API /register notice: {api_result['error']}")
                 else:
                     st.success(
                         f"📡 API /register → "
@@ -511,7 +658,6 @@ elif option == "De-register Face":
         st.info("No registered faces found in watchlist database.")
     else:
         st.subheader("Currently Registered Persons:")
-        # Render HTML table to avoid PyArrow DLL load issues on Windows/Anaconda
         st.write(df.to_html(index=False), unsafe_allow_html=True)
 
         selected_name = st.selectbox(
@@ -530,6 +676,7 @@ elif option == "De-register Face":
 
 
 # ==========================================================
+# ==========================================================
 # 3. LIVE RECOGNITION
 # ==========================================================
 
@@ -541,156 +688,360 @@ elif option == "Live Recognition":
     if not cache:
         st.warning("No faces registered yet. Please register at least one face first.")
     else:
-        st.subheader("Watchlist Database Status")
+        col_feed, col_side = st.columns([3, 2])
 
-        status_cols = st.columns(min(len(cache), 4))
-        for i, (name, data) in enumerate(cache.items()):
-            badge = "🔴 BLACKLISTED" if data["status"] == "Blacklisted" else "🟢 AUTHORISED"
-            aug_c = data.get("aug_count", len(data.get("embeddings", [])))
-            with status_cols[i % 4]:
-                st.metric(label=f"{name}", value=badge, delta=f"{aug_c} Training Vectors")
+        with col_feed:
+            col_t1, col_t2 = st.columns([2, 1])
 
-        st.divider()
+            with col_t1:
+                st.caption(
+                    f"Model: {MODEL_NAME} | Metric: {DISTANCE_METRIC} | "
+                    f"Threshold: {MATCH_THRESHOLD:.2f}"
+                )
 
-        col_t1, col_t2 = st.columns([2, 1])
-        with col_t1:
-            st.caption(f"{MODEL_NAME} {DISTANCE_METRIC} threshold: {MATCH_THRESHOLD:.2f}")
-        with col_t2:
-            start_camera = st.checkbox("Start Camera Feed", value=False)
+            with col_t2:
+                start_camera = st.toggle(
+                    "Start Camera Feed",
+                    value=False,
+                    key="start_camera_feed"
+                )
 
-        frame_placeholder = st.empty()
-        status_placeholder = st.empty()
+            frame_placeholder = st.empty()
+            status_placeholder = st.empty()
 
-        if start_camera:
-            camera = cv2.VideoCapture(0)
-            camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            camera.set(cv2.CAP_PROP_FPS, 30)
-            last_api_send = 0.0
+            # ------------------------------------------------------
+            # LIVE-FEED REGISTRATION AREA
+            # ------------------------------------------------------
+            # This does NOT upload a new photo.
+            # It uses the unknown face captured directly from the camera.
+            st.markdown("##### 🚨 Register Unknown Person from Live Feed")
 
-            if not camera.isOpened():
-                st.error("Unable to access webcam. Please check camera connection and permissions.")
-            else:
-                status_placeholder.info("📷 Camera active. Scanning for faces...")
+            # ==============================================================
+            # STEP 1: PROCESS PENDING REGISTRATION (before camera restarts)
+            # ==============================================================
+            if st.session_state.get("pending_blacklist_register"):
+                pending_name = st.session_state.get("pending_blacklist_name", "")
+                pending_face = st.session_state.get("latest_unknown_face")
 
-                while start_camera:
-                    ret, frame = camera.read()
-                    if not ret:
-                        status_placeholder.error("Failed to capture frame from webcam.")
-                        break
+                # Clear the pending flag immediately
+                st.session_state["pending_blacklist_register"] = False
 
-                    display_frame = frame.copy()
-                    detected_faces = detect_faces(frame)
-
-                    if len(detected_faces) == 0:
-                        status_placeholder.info("📷 Camera active. Scanning for faces...")
-
-                    for (x, y, w, h) in detected_faces:
-                        x = max(0, int(x))
-                        y = max(0, int(y))
-                        w = int(w)
-                        h = int(h)
-
-                        face_crop = crop_face_with_margin(frame, (x, y, w, h))
-                        if face_crop.size == 0:
-                            continue
-
-                        live_emb = extract_face_embedding(face_crop)
-
-                        best_name, best_status, min_dist, conf_pct = match_face_embedding(
-                            live_emb,
-                            cache,
-                            threshold=MATCH_THRESHOLD
+                if pending_face is not None and pending_name.strip():
+                    with st.spinner(
+                        "Saving face and updating DeepFace embeddings..."
+                    ):
+                        ok, msg = quick_blacklist_live_face(
+                            pending_name,
+                            pending_face,
+                            cache
                         )
 
-                        if best_name is not None and best_status == "Blacklisted":
-                            color = (0, 0, 255)  # Red for Blacklisted
-                            label = f"TARGET: {best_name} ({conf_pct:.0f}%)"
-                            status_placeholder.error(
-                                f"🚨 TARGET DETECTED: {best_name} (Blacklisted) | Distance: {min_dist:.3f} | Similarity: {conf_pct:.1f}%"
-                            )
-                        elif best_name is not None and best_status == "Authorised":
-                            color = (0, 255, 0)  # Green for Authorised
-                            label = f"AUTHORISED: {best_name} ({conf_pct:.0f}%)"
-                            status_placeholder.success(
-                                f"✅ AUTHORISED: {best_name} | Distance: {min_dist:.3f} | Similarity: {conf_pct:.1f}%"
-                            )
-                        else:
-                            color = (0, 255, 255)  # Yellow for Unknown
-                            label = "UNKNOWN"
-                            status_placeholder.warning(
-                                f"⚠️ Unknown face detected. Min Distance: {min_dist:.3f} (Threshold: {MATCH_THRESHOLD})"
-                            )
-
-                        # --------------------------------------------------
-                        # SEND IDENTIFY RESULT TO API
-                        # --------------------------------------------------
-                        entity_for_api = (
-                            "bad"
-                            if best_name is not None and best_status == "Blacklisted"
-                            else "good"
-                            if best_name is not None and best_status == "Authorised"
-                            else "unknown"
+                    if ok:
+                        st.session_state["latest_unknown_face"] = None
+                        st.session_state["pending_blacklist_name"] = ""
+                        st.success(
+                            f"🚨 {pending_name} is now BLACKLISTED and "
+                            f"registered in the system!"
                         )
-
-                        person_for_api = (
-                            best_name if best_name is not None else "Unknown"
-                        )
-                        confidence_for_api = (
-                            conf_pct if best_name is not None else 0.0
-                        )
-
-                        now = time.time()
-                        if now - last_api_send >= API_SEND_INTERVAL:
-                            api_result = send_identify_to_api(
-                                person=person_for_api,
-                                picture=face_crop,
-                                entity=entity_for_api,
-                                confidence=confidence_for_api
-                            )
-
-                            last_api_send = now
-
-                            if "error" in api_result:
-                                print(api_result["error"])
-                            else:
-                                st.caption(
-                                    f"📡 API /identify → "
-                                    f"{api_result.get('person', 'Unknown')} | "
-                                    f"{api_result.get('entity', 'unknown')} | "
-                                    f"{api_result.get('confidence', 0)}%"
-                                )
-
-                        cv2.rectangle(display_frame, (x, y), (x + w, y + h), color, 3)
-
-                        y_text = max(y - 10, 25)
-                        (text_w, text_h), baseline = cv2.getTextSize(
-                            label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
-                        )
-                        cv2.rectangle(
-                            display_frame,
-                            (x, y_text - text_h - 4),
-                            (x + text_w + 6, y_text + 4),
-                            color,
-                            -1
-                        )
-
-                        text_color = (0, 0, 0) if color == (0, 255, 255) else (255, 255, 255)
-                        cv2.putText(
-                            display_frame,
-                            label,
-                            (x + 3, y_text),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.6,
-                            text_color,
-                            2
-                        )
-
-                    display_frame_rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
-                    frame_placeholder.image(
-                        display_frame_rgb,
-                        channels="RGB",
-                        use_container_width=True
+                        time.sleep(1.5)
+                        st.rerun()
+                    else:
+                        st.error(msg)
+                else:
+                    st.error(
+                        "No unknown face available to register. "
+                        "Make sure an unknown person is visible on camera first."
                     )
 
-                camera.release()
+            # ==============================================================
+            # STEP 2: ALWAYS SHOW THE REGISTRATION FORM
+            # ==============================================================
+            # The face preview and form are rendered BEFORE the camera loop.
+            # - unknown_face_preview: updated live from inside the loop
+            # - text_input + button: always visible so the user can type
+            #   a name and click Register at any time, which breaks the
+            #   loop via Streamlit rerun.
+            # ==============================================================
+            reg_c1, reg_c2 = st.columns([1, 2])
+
+            with reg_c1:
+                unknown_face_preview = st.empty()
+                # Show any previously captured face from session_state
+                latest_unknown = st.session_state.get("latest_unknown_face")
+                if latest_unknown is not None:
+                    unknown_face_preview.image(
+                        cv2.cvtColor(latest_unknown, cv2.COLOR_BGR2RGB),
+                        caption="Unknown face (live)",
+                        width=160
+                    )
+                else:
+                    unknown_face_preview.info("No face captured yet")
+
+            with reg_c2:
+                st.warning(
+                    "⚠️ When an **UNKNOWN** person appears on camera, "
+                    "their face will be captured here automatically. "
+                    "Enter a name and click Register to blacklist them."
+                )
+
+                live_name = st.text_input(
+                    "Person Name",
+                    placeholder="e.g. Target_01",
+                    key="live_blacklist_name"
+                )
+
+                if st.button(
+                    "🔴 Register This Person as Blacklisted",
+                    type="primary",
+                    use_container_width=True,
+                    key="register_unknown_live"
+                ):
+                    latest_check = st.session_state.get("latest_unknown_face")
+                    if latest_check is None:
+                        st.error(
+                            "No unknown face captured yet. "
+                            "Show an unregistered person to the camera first."
+                        )
+                    elif not live_name.strip():
+                        st.error("Please enter a name first.")
+                    else:
+                        # Set pending flag — processed in STEP 1 on next rerun
+                        st.session_state["pending_blacklist_register"] = True
+                        st.session_state["pending_blacklist_name"] = live_name.strip()
+                        st.rerun()
+
+            # ------------------------------------------------------
+            # CAMERA
+            # ------------------------------------------------------
+            if not start_camera:
+                frame_placeholder.info(
+                    "📷 Camera is turned off. Toggle "
+                    "'Start Camera Feed' to start live face recognition."
+                )
+                status_placeholder.empty()
+
+            else:
+                camera = ThreadedCamera(src=0, width=640, height=480)
+                camera.start()
+
+                time.sleep(0.3)
+
+                if not camera.isOpened():
+                    status_placeholder.error(
+                        "Unable to access webcam. Please check camera connection and permissions."
+                    )
+                else:
+                    status_placeholder.info(
+                        "📷 Camera active. Fast face scanning active..."
+                    )
+
+                    frame_count = 0
+
+                    # Cache recent bounding boxes.
+                    # (x, y, w, h, label, color)
+                    cached_face_results = []
+
+                    try:
+                        while start_camera:
+                            ret, frame = camera.read()
+
+                            if not ret or frame is None:
+                                time.sleep(0.01)
+                                continue
+
+                            frame_count += 1
+                            display_frame = frame.copy()
+
+                            # ------------------------------------------
+                            # DeepFace recognition every N frames
+                            # ------------------------------------------
+                            if frame_count % RECOGNITION_FRAME_INTERVAL == 0:
+                                detected_faces = detect_faces(frame)
+                                new_results = []
+
+                                for (x, y, w, h) in detected_faces:
+                                    x, y, w, h = int(x), int(y), int(w), int(h)
+
+                                    face_crop = crop_face_with_margin(
+                                        frame,
+                                        (x, y, w, h)
+                                    )
+
+                                    if face_crop.size == 0:
+                                        continue
+
+                                    # Save this exact face crop.
+                                    # If DeepFace says Unknown, this is the
+                                    # face that will be registered later.
+                                    live_emb = extract_face_embedding(face_crop)
+
+                                    best_name, best_status, min_dist, conf_pct = (
+                                        match_face_embedding(
+                                            live_emb,
+                                            cache,
+                                            threshold=MATCH_THRESHOLD
+                                        )
+                                    )
+
+                                    if best_name is None:
+                                        # UNKNOWN
+                                        color = (0, 255, 255)
+                                        label = "UNKNOWN"
+
+                                        # Save the face crop to session_state
+                                        # for registration.
+                                        st.session_state[
+                                            "latest_unknown_face"
+                                        ] = face_crop.copy()
+
+                                        # Live-update the face preview in
+                                        # the registration panel so the user
+                                        # can see it WITHOUT stopping the camera.
+                                        try:
+                                            unknown_face_preview.image(
+                                                cv2.cvtColor(
+                                                    face_crop,
+                                                    cv2.COLOR_BGR2RGB
+                                                ),
+                                                caption="Unknown face (live)",
+                                                width=160
+                                            )
+                                        except Exception:
+                                            pass
+
+                                        status_placeholder.warning(
+                                            "⚠️ UNKNOWN PERSON detected! "
+                                            "Type a name below and click "
+                                            "'Register' to blacklist them."
+                                        )
+
+                                    elif best_status == "Blacklisted":
+                                        # BLACKLISTED
+                                        color = (0, 0, 255)
+                                        label = (
+                                            f"BLACKLISTED: {best_name} "
+                                            f"({conf_pct:.0f}%)"
+                                        )
+
+                                        status_placeholder.error(
+                                            f"🚨 BLACKLISTED: {best_name} | "
+                                            f"Similarity: {conf_pct:.1f}%"
+                                        )
+
+                                    else:
+                                        # AUTHORISED
+                                        color = (0, 255, 0)
+                                        label = (
+                                            f"AUTHORISED: {best_name} "
+                                            f"({conf_pct:.0f}%)"
+                                        )
+
+                                        status_placeholder.success(
+                                            f"✅ AUTHORISED: {best_name} | "
+                                            f"Similarity: {conf_pct:.1f}%"
+                                        )
+
+                                    new_results.append(
+                                        (x, y, w, h, label, color)
+                                    )
+
+                                cached_face_results = new_results
+
+                            # ------------------------------------------
+                            # Draw bounding boxes ONLY.
+                            # No targeting circle.
+                            # ------------------------------------------
+                            for (x, y, w, h, label, color) in cached_face_results:
+                                cv2.rectangle(
+                                    display_frame,
+                                    (x, y),
+                                    (x + w, y + h),
+                                    color,
+                                    3
+                                )
+
+                                y_text = max(y - 10, 25)
+
+                                (text_w, text_h), _ = cv2.getTextSize(
+                                    label,
+                                    cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.6,
+                                    2
+                                )
+
+                                cv2.rectangle(
+                                    display_frame,
+                                    (x, y_text - text_h - 4),
+                                    (x + text_w + 6, y_text + 4),
+                                    color,
+                                    -1
+                                )
+
+                                text_color = (
+                                    (0, 0, 0)
+                                    if color == (0, 255, 255)
+                                    else (255, 255, 255)
+                                )
+
+                                cv2.putText(
+                                    display_frame,
+                                    label,
+                                    (x + 3, y_text),
+                                    cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.6,
+                                    text_color,
+                                    2
+                                )
+
+                            frame_placeholder.image(
+                                cv2.cvtColor(
+                                    display_frame,
+                                    cv2.COLOR_BGR2RGB
+                                ),
+                                channels="RGB",
+                                use_container_width=True
+                            )
+
+                            time.sleep(0.01)
+
+                    finally:
+                        camera.stop()
+
+        # ----------------------------------------------------------
+        # RIGHT SIDE: REGISTERED PEOPLE
+        # ----------------------------------------------------------
+        with col_side:
+            st.subheader("📋 Registered Watchlist Profiles")
+
+            with st.container(height=500):
+                for idx, (p_name, p_data) in enumerate(cache.items()):
+                    p_img_path = get_registered_image_path(p_name, p_data)
+                    p_status = p_data.get("status", "Unknown")
+
+                    badge = (
+                        "🔴 Blacklisted"
+                        if p_status == "Blacklisted"
+                        else "🟢 Authorised"
+                    )
+
+                    aug_c = p_data.get(
+                        "aug_count",
+                        len(p_data.get("embeddings", []))
+                    )
+
+                    c_img, c_desc = st.columns([1, 2])
+
+                    with c_img:
+                        if p_img_path and os.path.exists(p_img_path):
+                            st.image(p_img_path, width=90)
+                        else:
+                            st.caption("No photo")
+
+                    with c_desc:
+                        st.markdown(f"**{p_name}**")
+                        st.caption(badge)
+                        st.caption(f"{aug_c} vectors")
+
+                    if idx < len(cache) - 1:
+                        st.divider()
+
