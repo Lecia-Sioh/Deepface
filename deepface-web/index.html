@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login · DeepFace Watchlist</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <nav id="nav"></nav>
+
+  <main class="login-wrap">
+    <section class="login-art">
+      <div>
+        <div class="eyebrow">ArcFace · YuNet · euclidean_l2</div>
+        <h1 style="margin-top:18px">KNOW<br>EVERY<em>FACE.</em></h1>
+        <p>Watchlist &amp; recognition system. Register faces, flag blacklisted persons, and monitor live webcam or recorded video in real time.</p>
+      </div>
+      <div class="spec" style="align-self:flex-start">
+        <span>MODEL <b>ArcFace</b></span><span>DETECTOR <b>yunet</b></span><span>THRESH <b>1.13</b></span>
+      </div>
+
+      <!-- decorative scanning face -->
+      <svg class="scan-face" viewBox="0 0 300 300" fill="none" aria-hidden="true">
+        <rect x="40" y="30" width="220" height="240" stroke="#d7ff1f" stroke-width="2" stroke-dasharray="6 6" opacity=".5"/>
+        <path d="M150 60c-45 0-70 35-70 80 0 55 30 100 70 100s70-45 70-100c0-45-25-80-70-80z" stroke="#f4f4f6" stroke-width="2" opacity=".6"/>
+        <circle cx="122" cy="135" r="6" fill="#d7ff1f"/><circle cx="178" cy="135" r="6" fill="#d7ff1f"/>
+        <path d="M150 145v30M130 200c12 10 28 10 40 0" stroke="#f4f4f6" stroke-width="2" opacity=".6"/>
+        <g fill="#d7ff1f"><circle cx="100" cy="110" r="2"/><circle cx="200" cy="110" r="2"/><circle cx="110" cy="190" r="2"/><circle cx="190" cy="190" r="2"/><circle cx="150" cy="230" r="2"/><circle cx="150" cy="90" r="2"/></g>
+        <rect class="scan-line" x="40" y="30" width="220" height="3" fill="#d7ff1f" opacity=".85"/>
+      </svg>
+    </section>
+
+    <section class="login-panel">
+      <form class="login-box" id="loginForm" autocomplete="on">
+        <div class="eyebrow">Secure access</div>
+        <h2>Log in</h2>
+        <p class="sub">Choose your access level to continue.</p>
+
+        <div class="role-pick" id="rolePick">
+          <button type="button" data-role="user" class="on"><b>👤 User</b><small>Register &amp; de-register faces</small></button>
+          <button type="button" data-role="admin"><b>⚙️ Admin</b><small>Full dashboard &amp; settings</small></button>
+        </div>
+
+        <div class="field">
+          <label for="username">Username</label>
+          <input class="input" id="username" autocomplete="username" required placeholder="e.g. user">
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input class="input" id="password" type="password" autocomplete="current-password" required placeholder="••••••••">
+        </div>
+        <div class="err" id="err"></div>
+        <button class="btn btn-primary btn-block btn-lg" type="submit" id="submitBtn">Log in as User →</button>
+
+        <a class="public-link" href="inference.html">No account? <b>Go to live Inference →</b> (public)</a>
+
+        <div class="demo-creds">
+          Demo accounts<br>
+          User → <b>user</b> / <b>user123</b><br>
+          Admin → <b>admin</b> / <b>admin123</b>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <script src="js/config.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    DF.renderNav('login');
+
+    const params = new URLSearchParams(location.search);
+    let role = params.get('need') === 'admin' ? 'admin' : 'user';
+    const rolePick = document.getElementById('rolePick');
+    const submitBtn = document.getElementById('submitBtn');
+    const err = document.getElementById('err');
+
+    function setRole(r) {
+      role = r;
+      rolePick.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.role === r));
+      submitBtn.textContent = `Log in as ${r === 'admin' ? 'Admin' : 'User'} →`;
+    }
+    rolePick.addEventListener('click', e => { const b = e.target.closest('button'); if (b) setRole(b.dataset.role); });
+    setRole(role);
+
+    if (params.get('next')) err.textContent = params.get('need') === 'admin' ? 'Admin login required for that page.' : 'Please log in to continue.';
+
+    // already logged in? skip ahead
+    const s = DF.auth.current();
+    if (s && !params.get('next')) location.replace(s.role === 'admin' ? 'admin.html' : 'register.html');
+
+    document.getElementById('loginForm').addEventListener('submit', e => {
+      e.preventDefault();
+      const res = DF.auth.login(document.getElementById("username").value, document.getElementById("password").value, role);
+      if (!res.ok) { err.textContent = res.msg; document.getElementById("password").value = ""; return; }
+      const next = params.get('next');
+      const allowed = next && /^[\w-]+\.html$/.test(next) && !(next === 'admin.html' && res.session.role !== 'admin');
+      location.href = allowed ? next : (res.session.role === 'admin' ? 'admin.html' : 'register.html');
+    });
+  </script>
+</body>
+</html>

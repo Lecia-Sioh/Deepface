@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>De-register Face · DeepFace Watchlist</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <nav id="nav"></nav>
+
+  <main class="page">
+    <header class="hero">
+      <div class="eyebrow">03 · Removal</div>
+      <h1>🗑️ De-register <em>Face</em></h1>
+      <p>Remove a person and all of their stored embeddings from the watchlist. This can't be undone.</p>
+    </header>
+
+    <div class="grid grid-side">
+      <section class="card">
+        <div class="card-head">
+          <h2>Currently Registered Persons <span class="n" id="total">0</span></h2>
+          <input class="input" id="search" placeholder="🔍 Search name or ID…" style="max-width:240px">
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>ID Number</th><th>Status</th><th>Photos</th><th>Vectors</th><th></th></tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <aside class="card" style="align-self:start">
+        <h2>Select person to remove</h2>
+        <div class="field">
+          <select class="input" id="sel"></select>
+        </div>
+        <div id="preview" class="mt"></div>
+        <button class="btn btn-danger btn-block btn-lg mt" id="removeBtn">Remove Person</button>
+      </aside>
+    </div>
+  </main>
+
+  <script src="js/config.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/deregister.js"></script>
+</body>
+</html>

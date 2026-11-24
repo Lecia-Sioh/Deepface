@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Register Face · DeepFace Watchlist</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <nav id="nav"></nav>
+
+  <main class="page">
+    <header class="hero">
+      <div class="eyebrow">02 · Enrolment</div>
+      <h1>👤 Register <em>Face</em></h1>
+      <p>Add a new person to the watchlist, or add more photos to someone already registered. Each photo is augmented into multiple embedding vectors.</p>
+    </header>
+
+    <div class="grid grid-2">
+      <!-- LEFT: details -->
+      <section class="card">
+        <h2><span class="n">01</span> Who are you registering?</h2>
+        <div class="seg" id="modeSeg" style="margin-bottom:20px">
+          <button class="on" data-v="new">New person</button>
+          <button data-v="existing">Add photos to existing</button>
+        </div>
+
+        <div id="newFields">
+          <div class="field">
+            <label for="pname">Person Name</label>
+            <input class="input" id="pname" placeholder="e.g. John Doe">
+          </div>
+          <div class="field">
+            <label for="pid">Identification Number</label>
+            <input class="input" id="pid" placeholder="e.g. NRIC / Passport / Staff ID">
+          </div>
+          <div class="field">
+            <span class="label">Watchlist Status</span>
+            <div class="seg seg-status" id="statusSeg">
+              <button class="on" data-v="Authorised">🟢 Authorised</button>
+              <button data-v="Blacklisted">🔴 Blacklisted</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="existingFields" class="hidden">
+          <div class="field">
+            <label for="existingSel">Select person</label>
+            <select class="input" id="existingSel"></select>
+          </div>
+          <div id="existingInfo" class="muted" style="font-size:14px"></div>
+        </div>
+
+        <div class="tip mt">💡 For best accuracy use <b>at least 5 photos</b>: facing the camera, turned left, turned right, looking slightly up and down, and in different lighting. A short video where the person slowly turns their head is the quickest way to get these.</div>
+      </section>
+
+      <!-- RIGHT: capture -->
+      <section class="card">
+        <h2><span class="n">02</span> Registration Method</h2>
+        <div class="seg" id="methodSeg" style="margin-bottom:20px">
+          <button class="on" data-v="photo">📁 Photos</button>
+          <button data-v="video">🎞️ Video</button>
+          <button data-v="webcam">📷 Webcam</button>
+        </div>
+
+        <!-- photos -->
+        <div id="m-photo">
+          <div class="drop" id="photoDrop">
+            <div class="big">⬆</div>
+            <strong>Drag &amp; drop face photos here</strong>
+            <small>or click to browse · JPG, JPEG, PNG · different angles recommended</small>
+            <input type="file" id="photoInput" accept="image/png,image/jpeg" multiple hidden>
+          </div>
+        </div>
+
+        <!-- video -->
+        <div id="m-video" class="hidden">
+          <div class="drop" id="videoDrop">
+            <div class="big">🎞️</div>
+            <strong>Drop a short video of the person</strong>
+            <small>MP4, MOV, WEBM · slowly turn head left → right</small>
+            <input type="file" id="videoInput" accept="video/*" hidden>
+          </div>
+          <div class="field mt">
+            <label>Frames to extract: <b id="fcVal" style="color:var(--accent)">8</b></label>
+            <input type="range" id="frameCount" min="3" max="20" value="8">
+            <div class="range-row"><span>3</span><span>20</span></div>
+          </div>
+          <div class="progress hidden" id="vProg"><i></i></div>
+        </div>
+
+        <!-- webcam -->
+        <div id="m-webcam" class="hidden">
+          <div class="viewer" id="camViewer" style="aspect-ratio:4/3">
+            <span class="rec">● LIVE</span>
+            <i class="corner c1"></i><i class="corner c2"></i><i class="corner c3"></i><i class="corner c4"></i>
+            <div class="placeholder" id="camPh"><span class="big">📷</span>Camera off</div>
+            <video id="cam" autoplay playsinline muted></video>
+          </div>
+          <div class="row mt">
+            <button class="btn btn-ghost" id="camToggle">Start camera</button>
+            <button class="btn btn-primary" id="snapBtn" disabled>📸 Take snapshot</button>
+          </div>
+        </div>
+
+        <div class="card-head mt" style="margin-bottom:0">
+          <span class="label">Captured: <b id="count" style="color:var(--accent)">0</b> photo(s) → <b id="vecCount" style="color:var(--accent)">0</b> vectors</span>
+          <button class="btn btn-ghost btn-sm" id="clearBtn">Clear all</button>
+        </div>
+        <div class="thumbs" id="thumbs"></div>
+      </section>
+    </div>
+
+    <div class="row mt" style="justify-content:flex-end">
+      <button class="btn btn-primary btn-lg" id="registerBtn">Register &amp; Train Model →</button>
+    </div>
+  </main>
+
+  <script src="js/config.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/register.js"></script>
+</body>
+</html>

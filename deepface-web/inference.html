@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Inference · DeepFace Watchlist</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <nav id="nav"></nav>
+
+  <main class="page">
+    <header class="hero">
+      <div class="eyebrow">04 · Live monitoring · public</div>
+      <h1>📹 Face Recognition &amp; <em>Watchlist</em> Monitoring</h1>
+      <p>ArcFace embeddings with YuNet face detection and non-blocking streaming. Blacklisted matches trigger an instant alert.</p>
+      <div class="spec" id="spec"></div>
+    </header>
+
+    <div class="grid grid-side">
+      <section>
+        <div class="card">
+          <span class="label">Input Source</span>
+          <div class="seg mt" id="srcSeg" style="margin-bottom:20px">
+            <button class="on" data-v="webcam">📷 Webcam (live)</button>
+            <button data-v="video">🎞️ Upload Video</button>
+          </div>
+
+          <!-- WEBCAM -->
+          <div id="src-webcam">
+            <div class="viewer" id="viewer">
+              <span class="rec">● REC · LIVE</span>
+              <i class="corner c1"></i><i class="corner c2"></i><i class="corner c3"></i><i class="corner c4"></i>
+              <div class="placeholder" id="ph"><span class="big">📷</span>Camera feed is off</div>
+              <video id="cam" autoplay playsinline muted></video>
+              <canvas id="overlay"></canvas>
+            </div>
+            <div class="row mt">
+              <button class="btn btn-primary" id="camBtn">▶ Start Camera Feed</button>
+              <span class="mono muted" id="fps"></span>
+            </div>
+            <div id="liveAlert"></div>
+          </div>
+
+          <!-- VIDEO -->
+          <div id="src-video" class="hidden">
+            <div class="drop" id="vDrop">
+              <div class="big">🎞️</div>
+              <strong>Upload a video to analyse</strong>
+              <small>Drag &amp; drop or click · MP4, AVI, MOV, MKV, WEBM, M4V</small>
+              <input type="file" id="vInput" accept="video/*" hidden>
+            </div>
+            <div id="vFile" class="mono muted mt"></div>
+
+            <div class="field mt">
+              <label>Analyse every Nth frame: <b id="nVal" style="color:var(--accent)">3</b></label>
+              <input type="range" id="nth" min="1" max="15" value="3">
+              <div class="range-row"><span>1 · most accurate</span><span>15 · fastest</span></div>
+            </div>
+
+            <div class="viewer hidden" id="vViewer">
+              <span class="rec">● ANALYSING</span>
+              <canvas id="vCanvas"></canvas>
+            </div>
+            <div id="vAlert"></div>
+            <div class="progress mt hidden" id="vProg"><i></i></div>
+            <div class="mono muted mt" id="vStatus"></div>
+
+            <button class="btn btn-primary btn-lg mt" id="analyseBtn" disabled>▶ Analyse Video</button>
+          </div>
+        </div>
+
+        <!-- REPORT -->
+        <div class="card mt hidden" id="report">
+          <div class="card-head">
+            <h2>🧾 Video Analysis Report</h2>
+            <div class="row">
+              <button class="btn btn-ghost btn-sm" id="csvBtn">⬇ Report CSV</button>
+              <a class="btn btn-primary btn-sm hidden" id="annBtn" target="_blank">⬇ Download Annotated Video</a>
+            </div>
+          </div>
+          <div class="mono muted" id="repMeta"></div>
+          <div id="repAlert"></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Name</th><th>ID Number</th><th>Status</th><th>First Seen</th><th>Last Seen</th><th>Detections</th><th>Best Similarity (%)</th></tr></thead>
+              <tbody id="repRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <aside class="card" style="align-self:start">
+        <h2>📋 Registered Watchlist Profiles</h2>
+        <div class="profiles" id="profiles"></div>
+      </aside>
+    </div>
+  </main>
+
+  <script src="js/config.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/inference.js"></script>
+</body>
+</html>

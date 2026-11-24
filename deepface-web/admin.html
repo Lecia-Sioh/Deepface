@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Dashboard · DeepFace Watchlist</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <nav id="nav"></nav>
+
+  <main class="page">
+    <header class="hero">
+      <div class="eyebrow">05 · Admin only</div>
+      <h1>⚙️ Admin <em>Dashboard</em></h1>
+      <p>System overview, watchlist control, user accounts, activity logs and model settings.</p>
+    </header>
+
+    <div class="grid grid-4" id="stats"></div>
+
+    <div class="tabs mt" id="tabs">
+      <button class="on" data-t="overview">Overview</button>
+      <button data-t="watchlist">Watchlist</button>
+      <button data-t="accounts">Accounts</button>
+      <button data-t="logs">Activity Log</button>
+      <button data-t="settings">Model Settings</button>
+    </div>
+
+    <!-- OVERVIEW -->
+    <section class="tab-panel on" id="t-overview">
+      <div class="grid grid-2">
+        <div class="card">
+          <h2>Watchlist breakdown</h2>
+          <div class="bar-chart" id="breakdown"></div>
+          <h2 class="mt" style="margin-top:28px">Vectors per person</h2>
+          <div class="bar-chart" id="vecChart"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>🚨 Recent blacklist alerts</h2><a class="btn btn-ghost btn-sm" href="inference.html">Open monitor →</a></div>
+          <div class="log" id="recentAlerts"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- WATCHLIST -->
+    <section class="tab-panel" id="t-watchlist">
+      <div class="card">
+        <div class="card-head">
+          <h2>All registered persons</h2>
+          <div class="row"><a class="btn btn-primary btn-sm" href="register.html">+ Register face</a></div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Name</th><th>ID Number</th><th>Status</th><th>Photos</th><th>Vectors</th><th>Registered</th><th>Actions</th></tr></thead>
+            <tbody id="wlRows"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ACCOUNTS -->
+    <section class="tab-panel" id="t-accounts">
+      <div class="grid grid-side">
+        <div class="card">
+          <h2>System accounts</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Username</th><th>Role</th><th>Created</th><th></th></tr></thead>
+              <tbody id="accRows"></tbody>
+            </table>
+          </div>
+        </div>
+        <form class="card" id="accForm" style="align-self:start">
+          <h2>+ New account</h2>
+          <div class="field"><label>Username</label><input class="input" id="aUser" required></div>
+          <div class="field"><label>Password</label><input class="input" id="aPass" type="password" minlength="6" required></div>
+          <div class="field"><span class="label">Role</span>
+            <div class="seg" id="aRole"><button type="button" class="on" data-v="user">User</button><button type="button" data-v="admin">Admin</button></div>
+          </div>
+          <button class="btn btn-primary btn-block">Create account</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- LOGS -->
+    <section class="tab-panel" id="t-logs">
+      <div class="card">
+        <div class="card-head">
+          <h2>Activity log</h2>
+          <div class="row">
+            <select class="input" id="logFilter" style="width:auto">
+              <option value="">All events</option>
+              <option value="alert">🚨 Blacklist alerts</option>
+              <option value="match">Authorised matches</option>
+              <option value="auth">Logins</option>
+              <option value="admin">Admin actions</option>
+            </select>
+            <button class="btn btn-ghost btn-sm" id="clearLogs">Clear log</button>
+          </div>
+        </div>
+        <div class="log" id="logList"></div>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="tab-panel" id="t-settings">
+      <div class="grid grid-2">
+        <form class="card" id="setForm">
+          <h2>Recognition model</h2>
+          <div class="grid grid-2" style="gap:12px">
+            <div class="field"><label>Model</label>
+              <select class="input" id="sModel"><option>ArcFace</option><option>Facenet512</option><option>Facenet</option><option>VGG-Face</option><option>SFace</option></select></div>
+            <div class="field"><label>Detector</label>
+              <select class="input" id="sDet"><option>yunet</option><option>retinaface</option><option>mtcnn</option><option>mediapipe</option></select></div>
+          </div>
+          <div class="field"><label>Distance metric</label>
+            <select class="input" id="sMetric"><option>euclidean_l2</option><option>cosine</option><option>euclidean</option></select></div>
+          <div class="field"><label>Match threshold: <b id="thVal" style="color:var(--accent)"></b></label>
+            <input type="range" id="sTh" min="0.4" max="1.4" step="0.01">
+            <div class="range-row"><span>0.40 · strict</span><span>1.40 · loose</span></div></div>
+          <div class="field"><label>Default video frame skip: <b id="fsVal" style="color:var(--accent)"></b></label>
+            <input type="range" id="sFs" min="1" max="15"></div>
+          <div class="field"><label>Backend API URL (blank = demo mode)</label>
+            <input class="input mono" id="sApi" placeholder="http://localhost:8000"></div>
+          <button class="btn btn-primary btn-block">Save settings</button>
+        </form>
+
+        <div>
+          <div class="card">
+            <h2>Augmentations</h2>
+            <p class="muted" style="font-size:14px;margin-bottom:8px">Applied to every photo when building embeddings.</p>
+            <label class="switch">Horizontal flip <input type="checkbox" id="augFlip"></label>
+            <label class="switch">Brightness / contrast <input type="checkbox" id="augBright"></label>
+            <label class="switch">Small rotation (±15°) <input type="checkbox" id="augRot"></label>
+            <label class="switch">Gaussian blur <input type="checkbox" id="augBlur"></label>
+          </div>
+          <div class="card mt">
+            <h2>🔁 Retrain Everyone</h2>
+            <p class="muted" style="font-size:14px;margin-bottom:16px">Rebuilds every person's embeddings with the current augmentation settings. Run this once after changing the augmentations.</p>
+            <div class="progress hidden" id="rtProg" style="margin-bottom:14px"><i></i></div>
+            <button class="btn btn-primary btn-block" id="retrainBtn">Retrain all faces</button>
+          </div>
+          <div class="card mt" style="border-color:var(--red)">
+            <h2 style="color:var(--red)">Danger zone</h2>
+            <button class="btn btn-danger btn-block" id="resetBtn">Reset all demo data</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/config.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>
